@@ -1,88 +1,37 @@
-type NumberedACL = 'Standard' | 'Extended';
-type AclRange = { start: number; stop: number };
+import { AclIdType, AclKind, Operation, PAD } from './constants';
+import type { L3Protocol, Packet } from './protocols';
+import { operationName, PortMatcher, WildcardMatcher } from './utils';
+import type { PortCondition } from './utils';
 
-export enum Operation {
-  Permit = 1,
-  Deny = 0,
+export type AclId = number | string;
+
+type StandardACEParams = {
+  op: Operation;
+  srcIp: string;
+  wildcardMask: string;
+};
+
+type ExtendedACEParams = {
+  op: Operation;
+  protocol: L3Protocol;
+  srcIp: string;
+  srcWildcard: string;
+  dstIp: string;
+  dstWildcard: string;
+  srcPort?: PortCondition;
+  dstPort?: PortCondition;
+};
+
+interface AclEntry {
+  id: AclId;
+  rules: AccessControlEntry[];
 }
-
-export const ReservedRanges = {
-  Standard: [
-    { start: 1, stop: 99 },
-    { start: 1300, stop: 1999 },
-  ],
-  Extended: [
-    { start: 100, stop: 199 },
-    { start: 2000, stop: 2699 },
-  ],
-} satisfies Record<NumberedACL, AclRange[]>;
-
-class Ansi {
-  static readonly RED = '\x1b[31m';
-  static readonly RESET = '\x1b[0m';
-
-  static red = (s: string) => `${Ansi.RED}${s}${Ansi.RESET}`;
-}
-
-export class IPv4 {
-  /** e.g. ['192','168','1','0'] */
-  readonly octets: readonly string[];
-
-  /** e.g. ['11000000','10101000','00000001','00000000'] */
-  readonly binary: readonly string[];
-
-  constructor(address: string) {
-    this.octets = address.split('.');
-    this.binary = this.octets.map((o) => parseInt(o, 10).toString(2).padStart(8, '0'));
-  }
-
-  toString(): string {
-    return this.octets.join('.');
-  }
-
-  toBinaryString(): string {
-    return this.binary.join('.');
-  }
-}
-
-export class AceMatch {
-  readonly isMatch: boolean;
-  /**
-   * [octetIndex, bitIndex] of the first mismatching must-match bit.
-   * bitIndex IS the string index (0 = MSB/leftmost, 7 = LSB/rightmost).
-   * undefined when isMatch === true.
-   */
-  readonly exitAt: readonly [number, number] | undefined;
-  readonly src: IPv4;
-  readonly target: IPv4;
-  readonly wildcard: IPv4;
-
-  constructor(isMatch: boolean, src: IPv4, target: IPv4, wildcard: IPv4, exitAt?: readonly [number, number]) {
-    this.isMatch = isMatch;
-    this.src = src;
-    this.target = target;
-    this.wildcard = wildcard;
-    this.exitAt = exitAt;
-  }
-}
-
-const PAD = {
-  index: 4,
-  operation: 7,
-  ipv4: 15,
-  wildcard: 15,
-} as const;
-
-export class AccessControlEntry {
-  readonly #seq: number;
-  readonly #ipAddr: IPv4;
-  readonly #wildcard: IPv4;
+export abstract class AccessControlEntry {
+  #seq: number;
   readonly #op: Operation;
 
-  constructor(sequenceNumber: number, operation: Operation, srcIp: string, wildcardMask: string) {
+  constructor(sequenceNumber: number, operation: Operation) {
     this.#seq = sequenceNumber;
-    this.#ipAddr = new IPv4(srcIp);
-    this.#wildcard = new IPv4(wildcardMask);
     this.#op = operation;
   }
 
@@ -93,134 +42,197 @@ export class AccessControlEntry {
     return this.#op;
   }
 
-  assess(srcIpAddress: string): AceMatch {
-    const src = new IPv4(srcIpAddress);
-    const target = this.#ipAddr;
-    const wildcard = this.#wildcard;
+  abstract get kind(): AclKind;
+  abstract assess(packet: Packet): boolean;
+  abstract toString(): string;
 
-    const lastOctet = 3;
-    const msb = 0; // left, most significant bit
-    const lsb = 7; // right, least significant bit
-    for (let o = lastOctet; o > -1; o--) {
-      for (let i = lsb; msb <= i; i--) {
-        const mustMatch = wildcard.binary[o][i] === '0';
-        const isMatch = src.binary[o][i] === target.binary[o][i];
-
-        if (mustMatch && !isMatch) {
-          return new AceMatch(false, src, target, wildcard, [o, i]);
-        }
-      }
-    }
-    return new AceMatch(true, src, target, wildcard);
+  resequence(n: number): void {
+    this.#seq = n;
   }
 
-  /**
-   * Logs the sequence number + operation on a match, or the bit-level
-   * diff table on a miss, then returns the resolved Operation.
-   */
-  resolveAction(match: AceMatch): Operation {
-    if (match.isMatch) {
-      console.log(this.#seq, Operation[this.#op]);
+  resolveAction(isMatch: boolean): Operation {
+    if (isMatch) {
+      console.log(this.#seq, operationName(this.#op));
       return this.#op;
     }
-    this.showMiss(match);
     return Operation.Deny;
   }
+}
 
-  showMiss(match: AceMatch): void {
-    const [octetIdx, bitIdx] = match.exitAt ?? [0, 0];
+export class StandardACE extends AccessControlEntry {
+  readonly #matcher: WildcardMatcher;
 
-    const row = (label: string, ip: IPv4): string => {
-      const dec = ip.toString().padEnd(PAD.ipv4);
-      const bin = ip.binary
-        .map((oct, i) => {
-          if (i !== octetIdx) return oct;
-          const before = oct.slice(0, bitIdx);
-          const bit = Ansi.red(oct[bitIdx]);
-          const after = oct.slice(bitIdx + 1);
-          return before + bit + after;
-        })
-        .join('.');
-      return `  ${label} : ${dec}  ${bin}`;
-    };
+  get kind(): AclKind {
+    return AclKind.Standard;
+  }
 
-    // Left padding = bitIdx (bitIdx IS string position from left).
-    const decColWidth = PAD.ipv4 + 2;
-    const arrow = match.target.binary
-      .map((_, i) => (i === octetIdx ? ' '.repeat(bitIdx) + '^' + ' '.repeat(7 - bitIdx) : ' '.repeat(8)))
-      .join('.');
+  constructor(seq: number, params: StandardACEParams) {
+    super(seq, params.op);
+    this.#matcher = new WildcardMatcher(params.srcIp, params.wildcardMask);
+  }
 
-    console.log(
-      [
-        '',
-        row('src    ', match.src),
-        row('target ', match.target),
-        `   ${''.padEnd(7)}  ${''.padEnd(decColWidth)}${arrow}`,
-        row('wild   ', match.wildcard),
-        '',
-      ].join('\n')
-    );
+  assess(packet: Packet): boolean {
+    const match = this.#matcher.match(packet.srcIp);
+    if (!match.isMatch) this.#matcher.showMiss(match);
+    return match.isMatch;
   }
 
   toString(): string {
-    const seq = this.#seq.toString().padEnd(PAD.index);
-    const op = Operation[this.#op].padEnd(PAD.operation);
-    const src = this.#ipAddr.toString().padEnd(PAD.ipv4);
-    const wildcard = this.#wildcard.toString().padEnd(PAD.wildcard);
-    return `${seq} ${op} ${src} ${wildcard}`;
+    const seq = this.sequenceNumber.toString().padEnd(PAD.index);
+    const op = operationName(this.operation).padEnd(PAD.operation);
+    const src = this.#matcher.target.toString().padEnd(PAD.ipv4);
+    const wc = this.#matcher.wildcard.toString().padEnd(PAD.wildcard);
+    return `${seq} ${op} ${src} ${wc}`;
+  }
+}
+
+export class ExtendedACE extends AccessControlEntry {
+  readonly #protocol: L3Protocol;
+  readonly #srcMatcher: WildcardMatcher;
+  readonly #dstMatcher: WildcardMatcher;
+  readonly #srcPort: PortMatcher | undefined;
+  readonly #dstPort: PortMatcher | undefined;
+
+  get kind(): AclKind {
+    return AclKind.Extended;
+  }
+
+  constructor(seq: number, params: ExtendedACEParams) {
+    const { op, protocol, srcIp, srcWildcard, dstIp, dstWildcard, srcPort, dstPort } = params;
+    super(seq, op);
+
+    this.#protocol = protocol;
+    this.#srcMatcher = new WildcardMatcher(srcIp, srcWildcard);
+    this.#dstMatcher = new WildcardMatcher(dstIp, dstWildcard);
+    this.#srcPort = srcPort ? new PortMatcher(srcPort) : undefined;
+    this.#dstPort = dstPort ? new PortMatcher(dstPort) : undefined;
+  }
+
+  assess(packet: Packet): boolean {
+    if (this.#protocol !== 'ip' && this.#protocol !== packet.protocol) return false;
+
+    const srcMatch = this.#srcMatcher.match(packet.srcIp);
+    if (!srcMatch.isMatch) {
+      this.#srcMatcher.showMiss(srcMatch);
+      return false;
+    }
+
+    const dstMatch = this.#dstMatcher.match(packet.dstIp);
+    if (!dstMatch.isMatch) {
+      this.#dstMatcher.showMiss(dstMatch);
+      return false;
+    }
+
+    if (this.#srcPort && (packet.srcPort === undefined || !this.#srcPort.matches(packet.srcPort))) return false;
+    if (this.#dstPort && (packet.dstPort === undefined || !this.#dstPort.matches(packet.dstPort))) return false;
+
+    return true;
+  }
+
+  toString(): string {
+    const seq = this.sequenceNumber.toString().padEnd(PAD.index);
+    const op = operationName(this.operation).padEnd(PAD.operation);
+    const proto = this.#protocol.padEnd(PAD.protocol);
+    const src = this.#srcMatcher.target.toString().padEnd(PAD.ipv4);
+    const srcWc = this.#srcMatcher.wildcard.toString().padEnd(PAD.wildcard);
+    const sp = (this.#srcPort?.toString() ?? '').padEnd(PAD.portCond);
+    const dst = this.#dstMatcher.target.toString().padEnd(PAD.ipv4);
+    const dstWc = this.#dstMatcher.wildcard.toString().padEnd(PAD.wildcard);
+    const dp = this.#dstPort?.toString() ?? '';
+
+    const portSection = this.#srcPort || this.#dstPort ? `  ${sp}  ${dst} ${dstWc}  ${dp}` : `  ${dst} ${dstWc}`;
+
+    return `${seq} ${op} ${proto} ${src} ${srcWc}${portSection}`;
   }
 }
 
 export class AccessList {
-  #incrementBy: number;
-  #entries: Map<number, AccessControlEntry[]>;
-
-  constructor() {
-    this.#incrementBy = 10;
-    this.#entries = new Map();
-  }
+  #incrementBy = 10;
+  readonly #registry = new Map<string, AclEntry>();
 
   setIncrement(n: number): void {
     this.#incrementBy = n;
   }
 
-  addStandardNumbered(id: number, op: Operation, src: string, mask: string): void {
-    const rules = this.#entries.get(id) ?? [];
-    const prev = rules.at(-1)?.sequenceNumber ?? 0;
-    const seq = prev + this.#incrementBy;
-    this.#entries.set(id, [...rules, new AccessControlEntry(seq, op, src, mask)]);
+  addStandard(id: AclId, params: StandardACEParams): void {
+    this.#addAce(id, new StandardACE(this.#nextSeq(id), params));
   }
 
-  validate(srcIp: string, aclId: number): string {
-    const rules = this.#entries.get(aclId) ?? [];
+  addExtended(id: AclId, params: ExtendedACEParams): void {
+    this.#addAce(id, new ExtendedACE(this.#nextSeq(id), params));
+  }
 
-    for (const ace of rules) {
-      const match = ace.assess(srcIp);
-      const action = ace.resolveAction(match);
+  deleteAce(aclId: AclId, seq: number): boolean {
+    const entry = this.#get(aclId);
+    if (!entry) return false;
+    const before = entry.rules.length;
+    entry.rules = entry.rules.filter((a) => a.sequenceNumber !== seq);
+    return entry.rules.length < before;
+  }
 
-      if (match.isMatch) return Operation[action];
+  deleteAcl(aclId: AclId): boolean {
+    return this.#registry.delete(String(aclId));
+  }
+
+  resequence(aclId: AclId, start: number, increment: number): void {
+    const entry = this.#get(aclId);
+    if (!entry) throw new RangeError(`ACL '${aclId}' not found`);
+    entry.rules.forEach((ace, i) => ace.resequence(start + i * increment));
+  }
+
+  validate(packet: Packet, aclId: AclId): string {
+    const entry = this.#get(aclId);
+    if (!entry) return operationName(Operation.Deny);
+    for (const ace of entry.rules) {
+      if (ace.assess(packet)) return operationName(ace.resolveAction(true));
     }
+    return operationName(Operation.Deny);
+  }
 
-    return Operation[Operation.Deny]; // implicit deny
+  showAcl(aclId: AclId): string {
+    const entry = this.#get(aclId);
+    return entry ? this.#renderEntry(entry) : `% ACL '${aclId}' not found\n`;
   }
 
   toString(listMarker = ' '): string {
-    let out = '';
-    for (const [key, rules] of this.#entries) {
-      out += `${this.#aclType(key)} IP Access List ${key}\n`;
-      for (const ace of rules) out += `${listMarker}${ace.toString()}\n`;
-    }
-    return out;
+    return [...this.#registry.values()].map((entry) => this.#renderEntry(entry, listMarker)).join('');
   }
 
-  #aclType(key: number): NumberedACL {
-    const inRange = (n: number, { start, stop }: AclRange) => ((n - start) | (stop - n)) >= 0;
+  entries(): IterableIterator<AclEntry> {
+    return this.#registry.values();
+  }
 
-    for (const [type, ranges] of Object.entries(ReservedRanges)) {
-      if (ranges.some((r) => inRange(key, r))) return type as NumberedACL;
-    }
-    throw new RangeError(`ACL key ${key} is not within any reserved range`);
+  hasAcl(aclId: AclId): boolean {
+    return this.#registry.has(String(aclId));
+  }
+
+  #key(id: AclId): string {
+    return String(id);
+  }
+
+  #get(id: AclId): AclEntry | undefined {
+    return this.#registry.get(this.#key(id));
+  }
+
+  #addAce(id: AclId, ace: AccessControlEntry): void {
+    const key = this.#key(id);
+    const entry = this.#registry.get(key) ?? { id, rules: [] };
+    entry.rules.push(ace);
+    this.#registry.set(key, entry);
+  }
+
+  #nextSeq(id: AclId): number {
+    return (this.#get(id)?.rules.at(-1)?.sequenceNumber ?? 0) + this.#incrementBy;
+  }
+
+  #idType(id: AclId): AclIdType {
+    return typeof id === 'number' ? AclIdType.Numbered : AclIdType.Named;
+  }
+
+  #renderEntry(entry: AclEntry, marker = ' '): string {
+    const kind = entry.rules[0]?.kind;
+    const listLabel = this.#idType(entry.id) === AclIdType.Numbered ? 'Access List' : 'access list';
+    const label = `${kind} IP ${listLabel} ${entry.id}`;
+    return [label, ...entry.rules.map((ace) => `${marker}${ace.toString()}`)].join('\n') + '\n';
   }
 }
-
-export default { AccessList, ReservedRanges };
