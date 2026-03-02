@@ -1,16 +1,13 @@
-import { createDefaultPreset } from 'ts-jest';
+import type { Config } from 'jest';
 
-const tsJestTransformCfg = createDefaultPreset().transform;
-
-/** @type {import("jest").Config} **/
-export default {
+const config: Config = {
   testEnvironment: 'node',
-  transform: {
-    ...tsJestTransformCfg,
-  },
+  preset: 'ts-jest',
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
   },
   testMatch: ['**/src/test/**/*.test.ts'],
   collectCoverageFrom: ['src/**/*.ts', '!src/**/*.d.ts', '!src/test/**'],
 };
+
+export default config;

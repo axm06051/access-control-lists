@@ -49,7 +49,6 @@ output/
 
 # Jest
 jest.config.js
-jest.config.ts
 .vscode-test/
 
 # Optional caches

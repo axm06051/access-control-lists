@@ -1,25 +1,37 @@
 {
   "name": "acl",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "2.0.0",
+  "description": "CCNA 200-301 ACL study tool",
+  "main": "dist/index.js",
   "scripts": {
     "dev": "tsx ./src/index.ts",
+    "build": "tsc",
     "test": "jest",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "lint": "tsc --noEmit"
   },
   "keywords": [
     "ccna",
-    "access control lists"
+    "access control lists",
+    "networking",
+    "cisco",
+    "cli"
   ],
-  "author": "adrian.mroz@grassvalley.com",
+  "author": "axm06051",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/axm06051/acl.git"
+  },
   "packageManager": "pnpm@10.30.3",
   "devDependencies": {
     "@types/jest": "^30.0.0",
     "@types/node": "^25.3.3",
+    "husky": "^9.1.7",
     "jest": "^30.2.0",
     "ts-jest": "^29.4.6",
+    "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
