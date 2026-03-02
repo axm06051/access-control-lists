@@ -1,4 +1,5 @@
-import glossaryData from '../../../data/glossary.json';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export interface GlossaryEntry {
   term: string;
@@ -18,9 +19,34 @@ export class Glossary {
   static initialize(): void {
     if (this.initialized) return;
 
-    Object.entries(glossaryData).forEach(([term, definition]) => {
-      this.entries.set(term.toLowerCase(), definition as string);
-    });
+    try {
+      const possiblePaths = [
+        path.join(__dirname, '../../data/glossary.json'),
+        path.join(__dirname, '../../../data/glossary.json'),
+        path.join(process.cwd(), 'data/glossary.json'),
+      ];
+
+      let glossaryData: Record<string, string> | null = null;
+      
+      for (const glossaryPath of possiblePaths) {
+        try {
+          if (fs.existsSync(glossaryPath)) {
+            glossaryData = JSON.parse(fs.readFileSync(glossaryPath, 'utf-8'));
+            break;
+          }
+        } catch {
+          // Continue to next path
+        }
+      }
+
+      if (glossaryData) {
+        Object.entries(glossaryData).forEach(([term, definition]) => {
+          this.entries.set(term.toLowerCase(), definition);
+        });
+      }
+    } catch (error) {
+      console.warn('Failed to load glossary.json:', error);
+    }
 
     this.initialized = true;
   }

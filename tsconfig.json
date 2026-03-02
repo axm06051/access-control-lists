@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "rootDir": "./src",
+    "rootDir": ".",
     "outDir": "./dist",
     "module": "esnext",
     "target": "esnext",
@@ -30,6 +30,6 @@
       "@/domains/*": ["./domains/*"]
     }
   },
-  "include": ["src/**/*", "**/*.test.ts", "src/test/*.test.ts", "**/*.spec.ts"],
+  "include": ["src/**/*", "data/**/*.json", "**/*.test.ts", "src/test/*.test.ts", "**/*.spec.ts"],
   "exclude": ["node_modules", "dist", "archive"]
 }
