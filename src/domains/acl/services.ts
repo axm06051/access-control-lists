@@ -1,4 +1,4 @@
-import { AclKind, AclIdType, Operation, Packet } from './types';
+import { AclKind, AclIdType, Operation, Packet, L3Protocol, PortCondition } from './types';
 import { AccessControlEntry, StandardACE, ExtendedACE, StandardACEParams, ExtendedACEParams } from './entities';
 import { operationName } from '../shared/utils';
 
